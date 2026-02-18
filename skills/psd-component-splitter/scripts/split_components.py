@@ -1,0 +1,501 @@
+# -*- coding: utf-8 -*-
+"""
+PSD 组件拆分器 - 主 CLI 入口
+
+将 PSD 图层结构拆分为多个独立的组件文件。
+支持 React (JSX + CSS Modules) 和 Vue (SFC) 两种框架。
+
+主要功能：
+- 解析 JSON 图层树文件
+- 识别第一级分组作为独立组件
+- 为每个分组生成独立的组件文件
+- 生成主入口组件 (App.jsx / App.vue)
+- 复制图片资源到输出目录
+
+兼容性：支持 Python 2.7+ 和 Python 3.x
+"""
+
+from __future__ import print_function
+import argparse
+import json
+import shutil
+import sys
+from pathlib import Path
+
+# 导入本地命名工具模块
+try:
+    from naming_utils import to_pascal_case, kebab_case, ensure_unique_names
+except ImportError:
+    # 如果导入失败，提供基本实现
+    import re
+
+    def to_pascal_case(name):
+        """将各种命名格式转换为 PascalCase"""
+        if not name:
+            return name
+        words = re.split(r'[-_]', name)
+        words = [w for w in words if w]
+        if not words:
+            return name.capitalize()
+        return ''.join(word.capitalize() for word in words)
+
+    def kebab_case(name):
+        """将名称转换为 kebab-case（用于文件名）"""
+        if not name:
+            return name
+        name = re.sub(r'[_\s]', '-', name)
+        name = re.sub(r'(?<!^)(?<!-)(?=[A-Z])', '-', name)
+        name = re.sub(r'-+', '-', name).lower()
+        return name.strip('-')
+
+    def ensure_unique_names(names):
+        """确保名称列表中的名称都是唯一的"""
+        if not names:
+            return []
+        seen = {}
+        result = []
+        for name in names:
+            if name in seen:
+                seen[name] += 1
+                new_name = "{}{}".format(name, seen[name])
+                result.append(new_name)
+            else:
+                seen[name] = 1
+                result.append(name)
+        return result
+
+# 导入生成器模块
+try:
+    from react_generator import (
+        generate_react_split_component,
+        generate_react_main_entry
+    )
+except ImportError:
+    print("[错误] 无法导入 react_generator 模块")
+    generate_react_split_component = None
+    generate_react_main_entry = None
+
+try:
+    from vue_generator import (
+        generate_vue_split_component,
+        generate_vue_main_entry
+    )
+except ImportError:
+    print("[错误] 无法导入 vue_generator 模块")
+    generate_vue_split_component = None
+    generate_vue_main_entry = None
+
+
+def load_json(path):
+    """加载 JSON 文件"""
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def find_root_bbox(data):
+    """查找根节点的边界框"""
+    if isinstance(data, dict) and data.get("bbox"):
+        return tuple(data["bbox"])
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("bbox"):
+                return tuple(item["bbox"])
+    return None
+
+
+def collect_layers_hierarchical(node, images_dir, parent_bbox=None):
+    """
+    递归收集图层，保留分组嵌套结构
+    简化版本，不处理文字图层
+    """
+    IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp"]
+    result = []
+
+    if isinstance(node, list):
+        for item in node:
+            result.extend(collect_layers_hierarchical(item, images_dir, parent_bbox))
+        return result
+
+    if not isinstance(node, dict):
+        return result
+
+    if not node.get("visible", True):
+        return result
+
+    bbox = node.get("bbox")
+    if not bbox or len(bbox) != 4:
+        return result
+
+    name = node.get("name", "").strip()
+    kind = node.get("kind", "group")
+    children_nodes = node.get("children", [])
+
+    # 计算相对坐标
+    x1, y1, x2, y2 = bbox
+    if parent_bbox:
+        px1, py1, _, _ = parent_bbox
+        relative_bbox = (x1 - px1, y1 - py1, x2 - px1, y2 - py1)
+    else:
+        relative_bbox = bbox
+
+    layer_data = {
+        "name": name,
+        "kind": kind,
+        "bbox": bbox,
+        "relative_bbox": relative_bbox,
+    }
+
+    # 尝试查找与当前图层/分组名称匹配的图片
+    # 这对于第一级分组尤其重要（如 bg -> bg.png）
+    if name:
+        for ext in IMAGE_EXTS:
+            img_path = images_dir / "{}{}".format(name, ext)
+            if img_path.exists():
+                layer_data["image"] = img_path
+                break
+
+    # 处理分组
+    if kind == "group" and children_nodes:
+        children = []
+        for child in children_nodes:
+            children.extend(collect_layers_hierarchical(child, images_dir, bbox))
+
+        if children:
+            layer_data["children"] = children
+            result.append(layer_data)
+        else:
+            result.append(layer_data)
+    else:
+        result.append(layer_data)
+
+    return result
+
+
+def collect_all_images_hierarchical(layers, result=None):
+    """递归收集所有图片路径"""
+    if result is None:
+        result = []
+
+    for layer in layers:
+        if layer.get("image"):
+            result.append(Path(layer["image"]))
+        if layer.get("children"):
+            collect_all_images_hierarchical(layer["children"], result)
+
+    return result
+
+
+def ensure_dir(path):
+    """确保目录存在"""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="PSD 组件拆分器 - 将 PSD 图层结构拆分为多个独立的组件文件",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # React 组件
+  python split_components.py --json layer-tree.json --images sliced-images/ --out react-output/ --framework react
+
+  # Vue 组件
+  python split_components.py --json layer-tree.json --images sliced-images/ --out vue-output/ --framework vue --component-name MyApp
+        """
+    )
+
+    parser.add_argument(
+        "--json",
+        required=True,
+        help="JSON 图层树文件路径（必需）"
+    )
+
+    parser.add_argument(
+        "--images",
+        required=True,
+        help="切片图片目录路径（必需）"
+    )
+
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="输出目录路径（必需）"
+    )
+
+    parser.add_argument(
+        "--framework",
+        required=True,
+        choices=["react", "vue"],
+        help="目标框架：react 或 vue（必需）"
+    )
+
+    parser.add_argument(
+        "--component-name",
+        default="PsdApp",
+        help="主组件名称（默认：PsdApp）"
+    )
+
+    return parser.parse_args()
+
+
+def main():
+    """主入口函数"""
+    # 解析命令行参数
+    args = parse_args()
+
+    # 转换为 Path 对象
+    json_path = Path(args.json)
+    images_dir = Path(args.images)
+
+    # 根据框架类型自动添加子目录后缀
+    base_out_dir = Path(args.out)
+    framework = args.framework.lower()
+    if framework == "react":
+        out_dir = base_out_dir / "react-split"
+    elif framework == "vue":
+        out_dir = base_out_dir / "vue-split"
+    else:
+        out_dir = base_out_dir
+
+    # 验证输入文件和目录
+    if not json_path.exists():
+        print("[错误] JSON 文件未找到: {}".format(json_path))
+        raise SystemExit(1)
+
+    if not images_dir.exists():
+        print("[错误] 图片目录未找到: {}".format(images_dir))
+        raise SystemExit(1)
+
+    # 加载 JSON 数据
+    print("[加载] JSON 文件: {}".format(json_path))
+    try:
+        data = load_json(json_path)
+    except Exception as e:
+        print("[错误] 加载 JSON 失败: {}".format(e))
+        raise SystemExit(1)
+
+    # 查找根边界框
+    root_bbox = find_root_bbox(data)
+    if not root_bbox:
+        print("[错误] 无法在 JSON 中找到根边界框")
+        raise SystemExit(1)
+
+    x1, y1, x2, y2 = root_bbox
+    canvas_size = (x2 - x1, y2 - y1)
+    print("[信息] 画布尺寸: {} x {}".format(canvas_size[0], canvas_size[1]))
+
+    # 确保输出目录存在
+    ensure_dir(out_dir)
+    print("[准备] 输出目录: {}".format(out_dir))
+
+    # 收集图层（分层结构）
+    print("[处理] 解析图层结构...")
+    layers = collect_layers_hierarchical(data, images_dir)
+    print("[信息] 发现 {} 个顶层图层".format(len(layers)))
+
+    # 识别第一级分组并保持原始顺序
+    print("[处理] 识别组件分组...")
+    first_level_groups_with_index = []
+    non_group_layers_with_index = []
+
+    for idx, layer in enumerate(layers):
+        if layer.get("kind") == "group":
+            first_level_groups_with_index.append((layer, idx))
+        else:
+            non_group_layers_with_index.append((layer, idx))
+
+    print("[信息] 发现 {} 个分组，{} 个独立图层".format(
+        len(first_level_groups_with_index), len(non_group_layers_with_index)
+    ))
+
+    # 过滤空分组并生成警告
+    valid_groups_with_index = []
+    for group, idx in first_level_groups_with_index:
+        if group.get("children"):
+            valid_groups_with_index.append((group, idx))
+        else:
+            print("[警告] 跳过空分组: {}".format(group.get("name", "unnamed")))
+
+    if not valid_groups_with_index:
+        print("[错误] 未找到有效的第一级分组")
+        raise SystemExit(1)
+
+    print("[信息] 有效分组数: {}".format(len(valid_groups_with_index)))
+
+    # 准备分组信息（生成唯一组件名），保留原始索引
+    print("[处理] 生成组件名称...")
+    groups_info = []
+    component_names = []
+
+    for group, idx in valid_groups_with_index:
+        group_name = group.get("name", "Group")
+        component_name = to_pascal_case(group_name)
+        # 确保组件名唯一
+        component_name = ensure_unique_names([component_name] + component_names)[0]
+        component_names.append(component_name)
+        dir_name = kebab_case(component_name)
+        groups_info.append((group, component_name, dir_name, idx))
+        print("  - {} -> {}".format(group_name, component_name))
+
+    # 为非分组图层设置类名（保留原始名称，共享 used_names 以检测重名）
+    try:
+        from react_generator import assign_preserve_names
+        # 提取所有非分组图层，一次性处理以确保重名检测
+        non_group_layers_list = [layer for layer, idx in non_group_layers_with_index]
+        assign_preserve_names(non_group_layers_list)
+    except ImportError:
+        pass
+
+    # 创建按原始顺序排列的元素列表
+    # 格式: (layer, original_index, component_info)
+    # component_info 为 None（非分组）或 (component_name, dir_name)
+    all_ordered_items = []
+    for layer, idx in non_group_layers_with_index:
+        all_ordered_items.append((layer, idx, None))
+    for group, component_name, dir_name, idx in groups_info:
+        all_ordered_items.append((group, idx, (component_name, dir_name)))
+    all_ordered_items.sort(key=lambda x: x[1])
+
+    # 根据框架调用相应的生成器
+    if framework == "react":
+        if not generate_react_split_component or not generate_react_main_entry:
+            print("[错误] React 生成器不可用")
+            raise SystemExit(1)
+
+        print("[模式] React 组件拆分模式")
+
+        # 为每个分组生成独立组件
+        for group, component_name, dir_name, idx in groups_info:
+            component_dir = out_dir / "components" / dir_name
+            print("[生成] React 组件: {} -> {}".format(
+                group.get("name", ""), component_name
+            ))
+            try:
+                # 生成组件并获取需要的图片列表
+                component_path, needed_images = generate_react_split_component(
+                    group,
+                    root_bbox,
+                    component_dir,
+                    preserve_names=True,
+                )
+
+                # 创建组件的 images 目录并复制图片
+                if needed_images:
+                    component_images_dir = component_dir / "images"
+                    ensure_dir(component_images_dir)
+                    for img_path in needed_images:
+                        src_path = Path(img_path)
+                        if src_path.exists():
+                            shutil.copy2(src_path, component_images_dir / src_path.name)
+                            print("  [复制] 图片: {} -> {}/".format(src_path.name, component_images_dir))
+            except Exception as e:
+                print("[错误] 生成组件 {} 失败: {}".format(component_name, e))
+                raise SystemExit(1)
+
+        # 生成主入口 App.jsx
+        print("[生成] React 主入口: App.jsx")
+        try:
+            generate_react_main_entry(
+                all_ordered_items,
+                canvas_size,
+                out_dir,
+            )
+        except Exception as e:
+            print("[错误] 生成主入口失败: {}".format(e))
+            raise SystemExit(1)
+
+    elif framework == "vue":
+        if not generate_vue_split_component or not generate_vue_main_entry:
+            print("[错误] Vue 生成器不可用")
+            raise SystemExit(1)
+
+        print("[模式] Vue 组件拆分模式")
+
+        # 为每个分组生成独立组件
+        for group, component_name, dir_name, idx in groups_info:
+            component_dir = out_dir / "components" / dir_name
+            print("[生成] Vue 组件: {} -> {}".format(
+                group.get("name", ""), component_name
+            ))
+            try:
+                # 生成组件并获取需要的图片列表
+                component_path, needed_images = generate_vue_split_component(
+                    group,
+                    root_bbox,
+                    component_dir,
+                    preserve_names=True,
+                )
+
+                # 创建组件的 images 目录并复制图片
+                if needed_images:
+                    component_images_dir = component_dir / "images"
+                    ensure_dir(component_images_dir)
+                    for img_path in needed_images:
+                        src_path = Path(img_path)
+                        if src_path.exists():
+                            shutil.copy2(src_path, component_images_dir / src_path.name)
+                            print("  [复制] 图片: {} -> {}/".format(src_path.name, component_images_dir))
+            except Exception as e:
+                print("[错误] 生成组件 {} 失败: {}".format(component_name, e))
+                raise SystemExit(1)
+
+        # 生成主入口 App.vue
+        print("[生成] Vue 主入口: App.vue")
+        try:
+            generate_vue_main_entry(
+                all_ordered_items,
+                canvas_size,
+                out_dir,
+            )
+        except Exception as e:
+            print("[错误] 生成主入口失败: {}".format(e))
+            raise SystemExit(1)
+
+    else:
+        print("[错误] 不支持的框架: {}".format(framework))
+        raise SystemExit(1)
+
+    # 复制根级非分组图层的图片到根 images 目录
+    print("[复制] 根级图片资源...")
+    copied_count = 0
+    non_group_layers = [layer for layer, idx, comp_info in all_ordered_items if comp_info is None]
+    if non_group_layers:
+        root_images_dir = out_dir / "images"
+        ensure_dir(root_images_dir)
+
+        def collect_root_images(layers):
+            images = []
+            for layer in layers:
+                if layer.get("image"):
+                    images.append(layer["image"])
+            return images
+
+        root_images = collect_root_images(non_group_layers)
+        for img_path in root_images:
+            src_path = Path(img_path)
+            if src_path.exists():
+                shutil.copy2(src_path, root_images_dir / src_path.name)
+                print("  [复制] 根级图片: {} -> {}/".format(src_path.name, root_images_dir))
+                copied_count += 1
+
+        print("[信息] 已复制 {} 张根级图片".format(copied_count))
+    else:
+        print("[信息] 无根级图片需要复制")
+
+    # 完成
+    print("")
+    print("=" * 50)
+    print("[成功] {} 拆分组件已生成: {}".format(
+        framework.capitalize(), out_dir
+    ))
+    print("  - 分组组件数: {}".format(len([x for x in all_ordered_items if x[2] is not None])))
+    print("  - 根级图层数: {}".format(len(non_group_layers)))
+    print("  - 图片资源数: {}".format(copied_count))
+    print("=" * 50)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

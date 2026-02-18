@@ -1,0 +1,592 @@
+# -*- coding: utf-8 -*-
+"""
+Vue 组件生成器模块
+
+从 PSD 图层结构生成 Vue 单文件组件（SFC）。
+支持生成分组子组件和主入口组件 App.vue。
+
+主要功能：
+- generate_vue_split_component: 为第一级分组生成独立的 Vue 组件
+- generate_vue_main_entry: 生成 Vue 主入口组件 App.vue
+
+兼容性：支持 Python 2.7+ 和 Python 3.x
+"""
+
+from __future__ import print_function
+import html
+import sys
+from pathlib import Path
+
+# 导入本地命名工具模块
+try:
+    from naming_utils import (
+        sanitize_component_name,
+        to_pascal_case,
+        kebab_case,
+        ensure_unique_names,
+    )
+except ImportError:
+    # 相对导入失败时，提供基本实现（用于直接运行脚本）
+    import re
+
+    def sanitize_component_name(name):
+        """清理组件名称，移除非法字符"""
+        cleaned = re.sub(r'[^\w\u4e00-\u9fff]', '', name)
+        if cleaned and cleaned[0].isdigit():
+            cleaned = '_' + cleaned
+        return cleaned
+
+    def to_pascal_case(name):
+        """将各种命名格式转换为 PascalCase"""
+        if not name:
+            return name
+        words = re.split(r'[-_\s]', name)
+        words = [w for w in words if w]
+        if not words:
+            return name.capitalize()
+        return ''.join(word.capitalize() for word in words)
+
+    def kebab_case(name):
+        """将名称转换为 kebab-case（用于文件名）"""
+        if not name:
+            return name
+        name = re.sub(r'[_\s]', '-', name)
+        name = re.sub(r'(?<!^)(?<!-)(?=[A-Z])', '-', name)
+        name = re.sub(r'-+', '-', name).lower()
+        return name.strip('-')
+
+    def ensure_unique_names(names):
+        """确保名称列表中的名称都是唯一的"""
+        if not names:
+            return []
+        seen = {}
+        result = []
+        for name in names:
+            if name in seen:
+                seen[name] += 1
+                new_name = "{}{}".format(name, seen[name])
+                result.append(new_name)
+            else:
+                seen[name] = 1
+                result.append(name)
+        return result
+
+
+def ensure_dir(path):
+    """确保目录存在，如果不存在则创建"""
+    path = Path(path)
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def assign_bem_class_names(layers, component_name):
+    """为图层分配 BEM 命名规范的类名"""
+    block = kebab_case(component_name)
+    counters = {"element": 0}
+
+    def walk(items, prefix=None):
+        for item in items:
+            counters["element"] += 1
+            element_name = "{}__elem{}".format(block, counters["element"])
+            if prefix:
+                element_name = "{}-{}".format(prefix, counters["element"])
+            item["bem_class"] = element_name
+            children = item.get("children")
+            if children:
+                walk(children, element_name)
+
+    walk(layers)
+
+
+def assign_preserve_names(layers, used_names=None):
+    """保留原始名称作为类名（与 psd-json-preview 保持一致）"""
+    if used_names is None:
+        used_names = set()
+    
+    for layer in layers:
+        name = layer.get("name", "").strip()
+        
+        # 直接使用原始名称，只处理非法字符（保留连字符）
+        # CSS 类名允许：字母、数字、连字符、下划线，但不能以数字开头
+        import re
+        base_name = name if name else "layer"
+        # 只移除真正非法的字符（保留连字符和下划线）
+        clean_name = re.sub(r'[^\w\-]', '', base_name)
+        
+        # 确保不以数字开头
+        if clean_name and clean_name[0].isdigit():
+            clean_name = 'n' + clean_name
+        
+        if not clean_name:
+            clean_name = "layer"
+        
+        # 处理重名
+        class_name = clean_name
+        suffix = 2
+        while class_name in used_names:
+            class_name = "{}_{}".format(clean_name, suffix)
+            suffix += 1
+        used_names.add(class_name)
+        
+        layer["bem_class"] = class_name
+        
+        # 递归处理子元素
+        children = layer.get("children")
+        if children:
+            assign_preserve_names(children, used_names)
+
+
+def _clone_layers_hierarchical(layers):
+    """浅拷贝图层树（保留 Path 等对象），避免影响原始数据"""
+    cloned = []
+    for layer in layers:
+        new_layer = dict(layer)
+        children = layer.get("children")
+        if children:
+            new_layer["children"] = _clone_layers_hierarchical(children)
+        cloned.append(new_layer)
+    return cloned
+
+
+def _apply_react_class_names(layers, component_name, preserve_names=False):
+    """为 Vue 输出分配类名，并同步到 layer['class_name']"""
+    if preserve_names:
+        assign_preserve_names(layers)
+    else:
+        assign_bem_class_names(layers, component_name)
+
+    def walk(items):
+        for it in items:
+            bem = it.get("bem_class")
+            if bem:
+                it["class_name"] = bem
+            if it.get("children"):
+                walk(it["children"])
+
+    walk(layers)
+
+
+def generate_vue_split_component(group_layer, canvas_bbox, component_dir, preserve_names=False):
+    """为第一级分组生成独立的 Vue 单文件组件
+
+    参数:
+        group_layer: 分组图层数据（包含 children）
+        canvas_bbox: 画布边界框 (x1, y1, x2, y2)
+        component_dir: 组件输出目录（如 vue-component/components/header/）
+        preserve_names: 是否保留原始名称
+
+    返回:
+        生成的组件目录路径
+    """
+    # 克隆图层树，避免污染原始数据
+    cloned_group = dict(group_layer)
+    children = group_layer.get("children", [])
+    if children:
+        cloned_group["children"] = _clone_layers_hierarchical(children)
+
+    # 获取分组名称并转换为 PascalCase（用于组件名）
+    group_name = group_layer.get("name", "Group")
+    component_name = to_pascal_case(group_name)
+
+    # 创建组件目录
+    vue_dir = Path(component_dir)
+    ensure_dir(vue_dir)
+
+    # 分配类名
+    _apply_react_class_names([cloned_group], component_name, preserve_names)
+
+    # 收集该组件需要的图片
+    def collect_images(layer):
+        images = []
+        if layer.get("image"):
+            images.append(layer["image"])
+        for child in layer.get("children", []):
+            images.extend(collect_images(child))
+        return images
+
+    needed_images = collect_images(cloned_group)
+
+    # 计算分组相对于画布的边界框
+    x1, y1, x2, y2 = group_layer.get("bbox", canvas_bbox)
+    cx1, cy1, cx2, cy2 = canvas_bbox
+    group_width = x2 - x1
+    group_height = y2 - y1
+
+    # 始终递归处理子图层，确保子元素被渲染
+    # 生成 scoped CSS（相对于分组的坐标）
+    def generate_group_scoped_css(group, group_bbox):
+        """为分组生成 scoped CSS，使用相对于分组的坐标"""
+        css_lines = []
+
+        def render_layer_css(layer):
+            lines = []
+            class_name = ".{}".format(layer.get("class_name") or "layer")
+
+            # 获取相对边界框
+            if "relative_bbox" in layer:
+                rx1, ry1, rx2, ry2 = layer["relative_bbox"]
+            else:
+                lx1, ly1, lx2, ly2 = layer.get("bbox", (0, 0, 0, 0))
+                gx1, gy1, gx2, gy2 = group_bbox
+                rx1, ry1 = lx1 - gx1, ly1 - gy1
+                rx2, ry2 = lx2 - gx1, ly2 - gy1
+
+            w = rx2 - rx1
+            h = ry2 - ry1
+
+            kind = layer.get("kind", "pixel")
+            name = layer.get("name", "")
+            layer_children = layer.get("children", [])
+
+            # 生成简单注释（不使用翻译器）
+            css_comment = "/* {}: {} */".format(kind, name) if name else ""
+
+            if layer_children:
+                # 分组容器样式
+                if css_comment:
+                    lines.append(css_comment)
+                lines.append("{} {{".format(class_name))
+                lines.append("  position: absolute;")
+                lines.append("  display: block;")
+                lines.append("  left: {}px;".format(rx1))
+                lines.append("  top: {}px;".format(ry1))
+                lines.append("  width: {}px;".format(w))
+                lines.append("  height: {}px;".format(h))
+                lines.append("}")
+                lines.append("")
+
+                # 递归处理子元素
+                for child in layer_children:
+                    lines.extend(render_layer_css(child))
+            else:
+                # 叶子节点样式
+                image_path = layer.get("image")
+                if image_path:
+                    if css_comment:
+                        lines.append(css_comment)
+                    file_name = Path(image_path).name
+                    lines.append(
+                        "{} {{ ".format(class_name)
+                        + "position: absolute; display: block; "
+                        + "left: {}px; top: {}px; width: {}px; height: {}px; ".format(rx1, ry1, w, h)
+                        + "background-image: url('./images/{}'); ".format(file_name)
+                        + "background-size: 100% 100%; background-repeat: no-repeat; "
+                        + "}"
+                    )
+                else:
+                    # 文字图层
+                    if css_comment:
+                        lines.append(css_comment)
+                    lines.append(
+                        "{} {{ ".format(class_name)
+                        + "position: absolute; display: block; "
+                        + "left: {}px; top: {}px; width: {}px; height: {}px; ".format(rx1, ry1, w, h)
+                        + "white-space: pre-wrap; "
+                        + "}"
+                    )
+
+            return lines
+
+        # 处理分组的根元素样式
+        css_lines.append("/* 组件根容器 - 相对于父容器定位 */")
+        css_lines.append(".root {")
+        css_lines.append("  position: absolute;")
+        css_lines.append("  display: block;")
+        css_lines.append("  left: {}px;".format(x1 - cx1))
+        css_lines.append("  top: {}px;".format(y1 - cy1))
+        css_lines.append("  width: {}px;".format(group_width))
+        css_lines.append("  height: {}px;".format(group_height))
+        css_lines.append("}")
+        css_lines.append("")
+
+        # 处理子图层
+        for child in group.get("children", []):
+            css_lines.extend(render_layer_css(child))
+
+        return "\n".join(css_lines)
+
+    # 生成 template 部分
+    def generate_group_template(group):
+        """为分组生成 Vue template 代码"""
+
+        def render_layer(layer, indent=6):
+            indent_str = " " * indent
+            class_name = layer.get("class_name") or "layer"
+            children = layer.get("children", [])
+            name = layer.get("name", "")
+            kind = layer.get("kind", "pixel")
+
+            # 生成简单注释（不使用翻译器）
+            comment = "<!-- {}: {} -->".format(kind, name) if name else ""
+
+            if children:
+                # 分组容器
+                lines = []
+                if comment:
+                    lines.append('{}{}'.format(indent_str, comment))
+                lines.append('{}<div class="{}">'.format(indent_str, class_name))
+                for child in children:
+                    lines.extend(render_layer(child, indent + 2))
+                lines.append('{}</div>'.format(indent_str))
+                return lines
+
+            if layer.get("image"):
+                # 图片图层
+                aria = name or "图层"
+                lines = []
+                if comment:
+                    lines.append('{}{}'.format(indent_str, comment))
+                lines.append('{}<div class="{}" role="img" :aria-label="\'{}\'" />'.format(
+                    indent_str,
+                    class_name,
+                    html.escape(aria, quote=True),
+                ))
+                return lines
+
+            # 文字图层
+            text_info = layer.get("text_info") or {}
+            text = text_info.get("text", "")
+            lines = []
+            if comment:
+                lines.append('{}{}'.format(indent_str, comment))
+            lines.append('{}<div class="{}">{}</div>'.format(
+                indent_str,
+                class_name,
+                html.escape(text),
+            ))
+            return lines
+
+        template_lines = [
+            "<template>",
+            '  <div class="root" :class="props.class" :style="props.style" @click="props.onClick">',
+        ]
+
+        for child in group.get("children", []):
+            template_lines.extend(render_layer(child, indent=4))
+
+        template_lines += [
+            "  </div>",
+            "</template>",
+        ]
+
+        return "\n".join(template_lines)
+
+    # 生成 script 部分
+    def generate_group_script(comp_name, group_name):
+        """为分组生成 Vue script 代码"""
+        script_lines = [
+            "",
+            "<script setup>",
+            "// Vue 3 组件 - {}".format(comp_name),
+            "// 自动生成自 PSD 图层组: {}".format(group_name),
+            "",
+            "// 定义组件 props",
+            "const props = defineProps({",
+            "  class: { type: String, default: '' },",
+            "  style: { type: Object, default: () => ({}) },",
+            "  onClick: Function",
+            "});",
+            "</script>",
+        ]
+        return "\n".join(script_lines)
+
+    # 生成 style 部分
+    def generate_group_style(css_content):
+        """为分组生成 Vue style 代码"""
+        return "\n<style scoped>\n{}\n</style>\n".format(css_content)
+
+    # 生成完整 SFC
+    template_text = generate_group_template(cloned_group)
+    script_text = generate_group_script(component_name, group_layer.get("name", ""))
+    css_text = generate_group_scoped_css(cloned_group, (x1, y1, x2, y2))
+    style_text = generate_group_style(css_text)
+
+    # 写入文件
+    sfc_content = template_text + script_text + style_text
+    (vue_dir / "index.vue").write_text(sfc_content, encoding="utf-8")
+
+    return vue_dir, needed_images
+
+
+def generate_vue_main_entry(ordered_items, canvas_size, out_dir):
+    """生成 Vue 主入口组件 App.vue
+
+    参数:
+        ordered_items: 按顺序排列的元素列表 [(layer, index, component_info), ...]
+                      component_info 为 None（非分组）或 (component_name, dir_name)
+        canvas_size: 画布尺寸 (width, height)
+        out_dir: 输出目录（vue-component/）
+
+    返回:
+        生成的 App.vue 路径
+    """
+    vue_dir = Path(out_dir)
+    ensure_dir(vue_dir)
+
+    width, height = canvas_size
+
+    # 生成导入语句
+    import_lines = []
+    component_names = []
+
+    for layer, idx, comp_info in ordered_items:
+        if comp_info:  # 分组
+            component_name, dir_name = comp_info
+            kebab_name = kebab_case(component_name)
+            import_lines.append(
+                'import {} from "./components/{}/index.vue";'.format(
+                    component_name,
+                    dir_name
+                )
+            )
+            component_names.append((component_name, kebab_name))
+
+    import_lines.append("")
+
+    # 处理根级非分组图层
+    def render_non_group_layer(layer, indent=6):
+        """渲染根级非分组图层"""
+        indent_str = " " * indent
+        class_name = layer.get("class_name") or "layer"
+        name = layer.get("name", "")
+        kind = layer.get("kind", "pixel")
+
+        # 生成简单注释（不使用翻译器）
+        comment = "<!-- {}: {} -->".format(kind, name) if name else ""
+
+        if layer.get("image"):
+            aria = name or "图层"
+            lines = []
+            if comment:
+                lines.append('{}{}'.format(indent_str, comment))
+            lines.append('{}<div class="{}" role="img" :aria-label="\'{}\'" />'.format(
+                indent_str,
+                class_name,
+                html.escape(aria, quote=True),
+            ))
+            return lines
+
+        # 文字图层
+        text_info = layer.get("text_info") or {}
+        text = text_info.get("text", "")
+        lines = []
+        if comment:
+            lines.append('{}{}'.format(indent_str, comment))
+        lines.append('{}<div class="{}">{}</div>'.format(
+            indent_str,
+            class_name,
+            html.escape(text),
+        ))
+        return lines
+
+    # 生成 template
+    template_lines = [
+        "<template>",
+        '  <div class="page">',
+        '    <div class="canvas">',
+    ]
+
+    # 按原始顺序渲染所有元素
+    for layer, idx, comp_info in ordered_items:
+        if comp_info is None:
+            # 非分组图层
+            template_lines.extend(render_non_group_layer(layer))
+        else:
+            # 分组组件
+            component_name, dir_name = comp_info
+            group_name = layer.get("name", "")
+            comment = "<!-- 分组: {} -->".format(group_name) if group_name else ""
+            if comment:
+                template_lines.append('      {}'.format(comment))
+            template_lines.append('      <{} />'.format(component_name))
+
+    template_lines += [
+        "    </div>",
+        "  </div>",
+        "</template>",
+    ]
+
+    # 生成 script
+    script_lines = [
+        "",
+        "<script setup>",
+        "// App 主入口组件",
+        "// 整合所有子组件并管理全局布局",
+        "",
+    ]
+    script_lines.extend(import_lines)
+    script_lines.append("</script>")
+
+    # 生成 scoped CSS
+    def generate_app_css():
+        """生成 App 组件的 scoped CSS"""
+        css_lines = [
+            "/* 页面容器 - 居中显示 */",
+            ".page { min-height: 100%; display: flex; align-items: flex-start; justify-content: center; padding: 24px; }",
+            "",
+            "/* 画布容器 - 包含所有组件 */",
+            ".canvas { position: relative; width: " + str(width) + "px; height: " + str(height) + "px; background: white; }",
+            "",
+            "/* 画布内所有直接子元素使用绝对定位 */",
+            ".canvas > div { position: absolute; display: block; }",
+            "",
+        ]
+
+        # 为所有非分组图层生成样式
+        for layer, idx, comp_info in ordered_items:
+            if comp_info is None:  # 非分组图层
+                class_name = ".{}".format(layer.get("class_name") or "layer")
+                x1, y1, x2, y2 = layer.get("bbox", (0, 0, 0, 0))
+                w = x2 - x1
+                h = y2 - y1
+                kind = layer.get("kind", "pixel")
+                name = layer.get("name", "")
+
+                # 生成简单注释（不使用翻译器）
+                css_comment = "/* {}: {} */".format(kind, name) if name else ""
+
+                image_path = layer.get("image")
+                if image_path:
+                    if css_comment:
+                        css_lines.append(css_comment)
+                    file_name = Path(image_path).name
+                    css_lines.append(
+                        "{} {{ ".format(class_name)
+                        + "position: absolute; display: block; "
+                        + "left: {}px; top: {}px; width: {}px; height: {}px; ".format(x1, y1, w, h)
+                        + "background-image: url('./images/{}'); ".format(file_name)
+                        + "background-size: 100% 100%; background-repeat: no-repeat; "
+                        + "}"
+                    )
+                else:
+                    # 文字图层
+                    if css_comment:
+                        css_lines.append(css_comment)
+                    css_lines.append(
+                        "{} {{ ".format(class_name)
+                        + "position: absolute; display: block; "
+                        + "left: {}px; top: {}px; width: {}px; height: {}px; ".format(x1, y1, w, h)
+                        + "white-space: pre-wrap; "
+                        + "}"
+                    )
+
+        return "\n".join(css_lines)
+
+    app_css = generate_app_css()
+
+    # 合并所有代码
+    style_lines = [
+        "",
+        "<style scoped>",
+        app_css,
+        "</style>",
+        "",
+    ]
+
+    app_vue_content = "\n".join(template_lines + script_lines + style_lines)
+
+    # 写入文件
+    (vue_dir / "App.vue").write_text(app_vue_content, encoding="utf-8")
+
+    return vue_dir / "App.vue"

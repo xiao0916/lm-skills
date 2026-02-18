@@ -1,0 +1,58 @@
+{
+  "rules": [
+    {
+      "name": "button",
+      "keywords": ["btn", "button", "按钮", "btn-primary", "btn-secondary"],
+      "target_tag": "button",
+      "priority": 10
+    },
+    {
+      "name": "link",
+      "keywords": ["link", "链接", "a-btn", "nav-link"],
+      "target_tag": "a",
+      "priority": 10
+    },
+    {
+      "name": "navigation",
+      "keywords": ["nav", "navbar", "导航", "menu", "main-nav"],
+      "target_tag": "nav",
+      "priority": 5
+    },
+    {
+      "name": "header",
+      "keywords": ["header", "头部", "top-bar", "page-header"],
+      "target_tag": "header",
+      "priority": 5
+    },
+    {
+      "name": "footer",
+      "keywords": ["footer", "底部", "bottom", "page-footer"],
+      "target_tag": "footer",
+      "priority": 5
+    },
+    {
+      "name": "main",
+      "keywords": ["main", "content", "主内容", "main-content"],
+      "target_tag": "main",
+      "priority": 5
+    },
+    {
+      "name": "article",
+      "keywords": ["article", "post", "blog", "blog-post"],
+      "target_tag": "article",
+      "priority": 4
+    },
+    {
+      "name": "aside",
+      "keywords": ["aside", "sidebar", "sidenav", "side-panel"],
+      "target_tag": "aside",
+      "priority": 4
+    },
+    {
+      "name": "section",
+      "keywords": ["section"],
+      "target_tag": "section",
+      "priority": 3
+    }
+  ]
+}

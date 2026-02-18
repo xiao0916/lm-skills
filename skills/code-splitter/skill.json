@@ -1,0 +1,5 @@
+{
+  "name": "code-splitter",
+  "version": "1.0.0",
+  "description": "分析 React/Vue 组件代码并智能拆分"
+}

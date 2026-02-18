@@ -1,0 +1,12 @@
+/* 测试 CSS Modules 文件 */
+.root { width: 100px; height: 200px; }
+.header { color: red; font-size: 16px; }
+
+/* 多行样式 */
+.card {
+  position: absolute;
+  left: 119px;
+  top: 145px;
+  width: 343px;
+  background-image: url('./images/bg.png');
+}

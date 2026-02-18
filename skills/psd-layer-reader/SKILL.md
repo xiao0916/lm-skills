@@ -32,11 +32,14 @@ py -3 -X utf8 scripts/psd_layers.py "path	oile.psd" --name "modal" --match cont
 
 ## 输出格式（JSON）
 每个节点包含：
-- `name`（字符串）
+- `name`（字符串）- 用于代码/文件命名的安全名称
+- `originalName`（字符串）- 保留原始图层名称，用于调试和参考
 - `kind`（字符串）
 - `visible`（布尔值）
 - `bbox`（[x1, y1, x2, y2]）
 - `children`（子节点数组）
+
+> **提示**：`name` 字段与 `originalName` 初始值相同。后续处理时，如果遇到不合法命名（如特殊字符、空格开头等），可以在 `name` 中生成随机名称，同时保留 `originalName` 用于追溯原始图层名称。
 
 ## 备注
 - Windows 下建议使用 `py -3 -X utf8`，避免编码错误。
@@ -44,3 +47,4 @@ py -3 -X utf8 scripts/psd_layers.py "path	oile.psd" --name "modal" --match cont
 
 ## 资源
 - `scripts/psd_layers.py`：PSD 图层树导出脚本。
+- `references/PSD_TOOLS_TEXT_EXTRACTION_EXAMPLES.md`：psd-tools 文字图层提取参考（字段路径与示例）。
