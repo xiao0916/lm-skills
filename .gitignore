@@ -1,1 +1,10 @@
+.sisyphus
+.venvs
+.claude
+.opencode
+.trae
+.pytest_cache
+
 test
+tmp
+node_modules
