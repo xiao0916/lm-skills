@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 # 导入共享翻译模块和工具模块
-_SHARED_DIR = str(Path(__file__).resolve().parent.parent.parent / "_shared")
+_SHARED_DIR = str(Path(__file__).resolve().parent / "utils")
 if _SHARED_DIR not in sys.path:
     sys.path.insert(0, _SHARED_DIR)
 from layer_name_translator import LayerNameTranslator
