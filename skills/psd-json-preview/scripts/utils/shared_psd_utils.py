@@ -360,7 +360,8 @@ def collect_layers_hierarchical(
     }
 
     # 处理分组
-    if kind == "group" and children_nodes:
+    # 处理分组和画板
+    if kind in ("group", "artboard") and children_nodes:
         children = []
         for child in children_nodes:
             children.extend(

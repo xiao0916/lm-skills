@@ -250,7 +250,7 @@ def write_html_hierarchical(out_dir, layers, translator = None):
             if comment:
                 lines.append('{}{}'.format(indent_str, comment))
             alt_text = translator.translate_for_alt(name)
-            lines.append('{}<div class="{}" role="img" aria-label="{}"></div>'.format(indent_str, class_name, alt_text or name))
+            lines.append('{}<div class="{}" aria-label="{}"></div>'.format(indent_str, class_name, alt_text or name))
         else:
             # 文字图层
             text_info = layer.get("text_info") or {}
@@ -430,7 +430,7 @@ def generate_jsx_from_layers(layers, component_name, preserve_names=False, trans
             lines = []
             if jsx_comment:
                 lines.append('{}{}'.format(indent_str, jsx_comment))
-            lines.append('{}<div {} role="img" aria-label="{}" />'.format(
+            lines.append('{}<div {} aria-label="{}" />'.format(
                 indent_str,
                 class_attr(class_name),
                 html.escape(aria, quote=True),
@@ -634,7 +634,7 @@ def generate_vue_from_layers(layers, component_name, preserve_names=False, trans
             lines = []
             if comment:
                 lines.append('{}{}'.format(indent_str, comment))
-            lines.append('{}<div {} role="img" :aria-label="\'{}\'" />'.format(
+            lines.append('{}<div {} :aria-label="\'{}\'" />'.format(
                 indent_str,
                 class_attr(class_name),
                 html.escape(aria, quote=True),
@@ -853,7 +853,7 @@ def write_html(out_dir, layers, translator = None):
                 if comment:
                     html_lines.append("        {}".format(comment))
                 html_lines.append(
-                    '        <div class="{}" role="img" aria-label="{}">'.format(class_name, alt_text or original)
+                    '        <div class="{}" aria-label="{}">'.format(class_name, alt_text or original)
                 )
                 for child in children:
                     child_class = child["class_name"]
@@ -865,7 +865,7 @@ def write_html(out_dir, layers, translator = None):
                 if comment:
                     html_lines.append("        {}".format(comment))
                 html_lines.append(
-                    '        <div class="{}" role="img" aria-label="{}"></div>'.format(class_name, alt_text or original)
+                    '        <div class="{}" aria-label="{}"></div>'.format(class_name, alt_text or original)
                 )
         else:
             if layer.get("parent_name"):
@@ -1068,7 +1068,9 @@ def main():
     x1, y1, x2, y2 = root_bbox
     canvas_size = (x2 - x1, y2 - y1)
     
-    ensure_dir(out_dir)
+    # HTML 预览输出到 preview 子目录
+    preview_dir = out_dir / "preview"
+    ensure_dir(preview_dir)
     
     # 初始化翻译器
     translator = LayerNameTranslator(args.dict)
@@ -1083,7 +1085,7 @@ def main():
 
         # 仅生成 React（不生成 HTML）
         if args.react_only:
-            react_out_dir = out_dir.parent / "react-component"
+            react_out_dir = out_dir / "react-component"
             generate_react_component(
                 layers,
                 canvas_size,
@@ -1096,12 +1098,12 @@ def main():
             return
 
         # 默认：生成 HTML 预览（向后兼容）
-        write_html_hierarchical(out_dir, layers, translator)
-        write_css_hierarchical(out_dir, canvas_size, layers, translator)
+        write_html_hierarchical(preview_dir, layers, translator)
+        write_css_hierarchical(preview_dir, canvas_size, layers, translator)
         
         # 复制图片
         all_images = collect_all_images_hierarchical(layers)
-        images_out_dir = out_dir / "images"
+        images_out_dir = preview_dir / "images"
         ensure_dir(images_out_dir)
         
         if args.copy_all:
@@ -1114,7 +1116,7 @@ def main():
 
         # 可选：同时生成 React 组件（输出到与 preview 同级的目录）
         if args.generate_react:
-            react_out_dir = out_dir.parent / "react-component"
+            react_out_dir = out_dir / "react-component"
 
             # 单组件模式
             generate_react_component(
@@ -1128,7 +1130,7 @@ def main():
         
         # 可选：同时生成 Vue 组件（输出到与 preview 同级的目录）
         if args.generate_vue:
-            vue_out_dir = out_dir.parent / "vue-component"
+            vue_out_dir = out_dir / "vue-component"
 
             # 单组件模式
             generate_vue_component(

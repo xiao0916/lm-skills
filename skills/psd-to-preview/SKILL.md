@@ -77,14 +77,13 @@ py -3 .claude/skills/psd-slicer/scripts/export_slices.py \
 # 步骤 3：代码生成
 py -3 .claude/skills/psd-json-preview/scripts/generate_preview.py \
   --json <输出目录>/layer-tree.json --images <输出目录>/sliced-images \
-  --out <输出目录>/preview --generate-react --generate-vue \
+  --out <输出目录> --generate-react --generate-vue \
   --component-name PsdComponent --preserve-names
 ```
 
 **关键提醒**：
 
 - ✅ 使用 `py -3`（Windows）或 `python3`（Linux/Mac）
-- ⚠️ 输出目录示例：`verify-flow/verify-028`（不要在路径末尾加 `/preview`）
 
 ---
 
@@ -121,21 +120,25 @@ A: psd-slicer 会跳过不可见层和非法命名图层（中文等）。
 **Q: PSD 包含中文图层？**  
 A: 默认跳过。只有用户明确要求导出时，步骤2加 `--mapping-json <输出目录>/layer-tree.json`
 
-**Q: 为什么会出现 `preview/preview/` 双重嵌套？**  
-A: 输出目录名不要用 "preview"，建议用 `verify-028`、`design-v1` 等。
-
 ---
 
 ## 输出目录结构
 
 ```
 output/
-├── preview.html          # 主预览页面
 ├── layer-tree.json       # 图层数据
 ├── sliced-images/        # PNG切片
-├── preview/              # 预览资源
+├── preview/              # HTML 预览
+│   ├── index.html
+│   ├── styles.css
+│   └── images/
 ├── react-component/      # React组件
+│   ├── index.jsx
+│   ├── index.module.css
+│   └── images/
 └── vue-component/        # Vue组件
+    ├── index.vue
+    └── images/
 ```
 
 ---
@@ -175,4 +178,4 @@ py -3 -m pip install scikit-image
 
 ---
 
-**版本**: 1.4 | **更新**: 2026年2月12日
+**版本**: 1.5 | **更新**: 2026年2月26日
