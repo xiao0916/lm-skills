@@ -28,11 +28,11 @@ py -3 -X utf8 scripts/psd_layers.py "design.psd" --name "target" --match contain
 ```
 
 ## 布局标签提示
-在编写 UI 代码时，请注意 `layoutTag` 字段：
-- `flow-y`: 对应垂直流式布局（Flex column）。
-- `flow-x`: 对应水平流式布局（Flex row）。
-- `fixed`: 对应固定定位。
-- `abs`: 对应绝对定位。
+在编写 UI 代码时，请注意 `layoutTag` 字段。更详细的排版算法与响应式能力，请阅读 [布局标签使用指南](../psd-to-preview/LAYOUT_TAGS_GUIDE.md)。
+- `[flow-y]`: 对应垂直流式布局（Flex column）。
+- `[flow-x]`: 对应水平流式布局（Flex row）。
+- `[fixed]`: 对应固定视口定位。
+- `[abs]`: 对应绝对定位（脱离 Flex 流排版）。
 
 ---
 **版本**: 1.0 | **关联技能**: [psd-layer-reader](../SKILL.md)

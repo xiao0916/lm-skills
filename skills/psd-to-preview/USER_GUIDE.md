@@ -23,6 +23,9 @@
 3.  **智能切图 (`psd-slicer`)**：根据需求导出图片（若要求文案转代码则加上 `--skip-type`）。
 4.  **预览合成 (`psd-json-preview`)**：生成 HTML / React / Vue 文件（若要求文案转代码则加上 `--include-text`）。
 
+## 布局标签支持
+在 PSD 设计阶段，通过在图层或组名称前添加 `[flow-y]`、`[flow-x]` 等标签，可以获得真正的自适应 Flex 布局与特殊定位（而不是死板的绝对坐标叠加）。详细的标签定义请阅读 [布局标签使用指南](./LAYOUT_TAGS_GUIDE.md)。
+
 ## 开发者提示
 - **输出目录**: 默认为 PSD 同名目录下的 `preview/`。
 - **组件名称**: 默认为 `PsdComponent`，您可以通过 Prompt 指定特定名称。
