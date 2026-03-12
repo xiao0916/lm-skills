@@ -47,6 +47,7 @@ py -3 scripts/export_slices.py design.psd -o ./comps/ -g -p component-
 | `--prefix`              | `-p` | 前缀过滤（如：`slice-`）              |
 | `--allow-illegal-names` | 无   | 允许中文/特殊字符（慎用）             |
 | `--mapping-json`        | `-m` | JSON 映射文件路径（用于中文图层导出） |
+| `--skip-type`          | 无   | 跳过文本图层（`kind == 'type'`）      |
 
 ## 何时使用名称映射
 
@@ -144,6 +145,16 @@ Done! Exported to: verify-flow/verify-010/sliced-images
 - 成功导出：126 个图层（31 个组 + 95 个图片）
 - 带图层效果需额外依赖：约 10 个（如"活动规则"、"SLOGAN"、"标题"等）
 
+### 排除文本图层
+
+如果您计划在 HTML 中使用真实的文本（而不是图片），请使用 `--skip-type` 参数：
+
+```bash
+py -3 scripts/export_slices.py design.psd --skip-type
+```
+
+配合 `psd-json-preview` 的 `--include-text` 参数，可以实现设计稿文字的完美还原。
+
 ### 向后兼容
 
 - 不带 `--mapping-json` 参数时，行为与之前完全一致
@@ -196,6 +207,7 @@ py -3 -m pip install scikit-image
 | "只导出组" / "图层组"   | 使用 `-g` / `--groups-only` 参数               |
 | "icon-" 开头            | 使用 `-p icon-` 参数                           |
 | "保存到 xxx"            | 使用 `-o xxx` 参数                             |
+| "不导出文字" / "文字转代码" | 使用 `--skip-type` 参数                       |
 
 ---
 

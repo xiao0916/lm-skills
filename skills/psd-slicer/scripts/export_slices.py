@@ -106,7 +106,7 @@ def is_group(layer):
 
 
 def export_layer(layer, output_dir, exported_names=None, groups_only=False, 
-                 prefix_filter=None, allow_illegal_names=False, name_mapping=None):
+                 prefix_filter=None, allow_illegal_names=False, name_mapping=None, **kwargs):
     """Export a single layer as PNG.
     
     Args:
@@ -140,6 +140,14 @@ def export_layer(layer, output_dir, exported_names=None, groups_only=False,
     
     # If prefix_filter is set, skip layers that don't match the prefix
     if prefix_filter and not has_prefix(layer.name, prefix_filter):
+        return
+
+    # Skip text layers if skip_type is True
+    if getattr(layer, "kind", None) == "type" and kwargs.get("skip_type"):
+        # Still need to recurse if it's a group (rare for type layers, but possible)
+        if layer_is_group:
+            for child in layer:
+                export_layer(child, output_dir, exported_names, groups_only, prefix_filter, allow_illegal_names, name_mapping, **kwargs)
         return
     
     # Try to export the layer
@@ -192,7 +200,7 @@ def export_layer(layer, output_dir, exported_names=None, groups_only=False,
     # Recursively export children (only for groups)
     if layer_is_group:
         for child in layer:
-            export_layer(child, output_dir, exported_names, groups_only, prefix_filter, allow_illegal_names, name_mapping)
+            export_layer(child, output_dir, exported_names, groups_only, prefix_filter, allow_illegal_names, name_mapping, **kwargs)
 
 
 def main():
@@ -206,6 +214,7 @@ def main():
                        help="Path to JSON file from psd-layer-reader for name mapping. "
                             "When provided, uses originalName to match layers and "
                             "name as output filename (useful for Chinese layer names).")
+    parser.add_argument("--skip-type", action="store_true", help="Skip text layers (kind == 'type')")
     args = parser.parse_args()
     
     # Create output directory
@@ -238,7 +247,8 @@ def main():
                     groups_only=args.groups_only, 
                     prefix_filter=args.prefix, 
                     allow_illegal_names=args.allow_illegal_names,
-                    name_mapping=name_mapping)
+                    name_mapping=name_mapping,
+                    skip_type=args.skip_type)
     
     mode_str = " ({})".format(', '.join(modes))
     print("\nDone! Exported to: {}{}".format(output_dir.absolute(), mode_str))

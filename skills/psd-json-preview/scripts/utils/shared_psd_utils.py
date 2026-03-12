@@ -327,6 +327,8 @@ def collect_layers_hierarchical(
         return result
 
     name = node.get("name", "").strip()
+    original_name = node.get("originalName", name)
+    layout_tag = node.get("layoutTag")
     kind = node.get("kind", "group")
     children_nodes = node.get("children", [])
 
@@ -353,6 +355,8 @@ def collect_layers_hierarchical(
 
     layer_data = {
         "name": name,
+        "originalName": original_name,
+        "layoutTag": layout_tag,
         "kind": kind,
         "bbox": bbox,
         "relative_bbox": relative_bbox,
@@ -412,3 +416,106 @@ def collect_all_images_hierarchical(layers, result=None):
 def ensure_dir(path):
     """确保目录存在"""
     path.mkdir(parents=True, exist_ok=True)
+
+def _compute_margins_for_flow(flow_children, parent_layout):
+    prev_bbox = None
+    for c in flow_children:
+        rx1, ry1, rx2, ry2 = c["relative_bbox"]
+        
+        if "layout_css_rules" not in c:
+            c["layout_css_rules"] = {}
+            
+        c["layout_css_rules"]["position"] = "relative"
+        
+        if parent_layout == "flow-y":
+            if prev_bbox:
+                margin_top = ry1 - prev_bbox[3]
+            else:
+                margin_top = ry1
+            
+            c["layout_css_rules"]["margin-top"] = "{}px".format(margin_top)
+            if rx1 != 0:
+                c["layout_css_rules"]["margin-left"] = "{}px".format(rx1)
+            
+        elif parent_layout == "flow-x":
+            if prev_bbox:
+                margin_left = rx1 - prev_bbox[2]
+            else:
+                margin_left = rx1
+                
+            c["layout_css_rules"]["margin-left"] = "{}px".format(margin_left)
+            if ry1 != 0:
+                c["layout_css_rules"]["margin-top"] = "{}px".format(ry1)
+            
+        prev_bbox = (rx1, ry1, rx2, ry2)
+
+def process_layout_rules(layers, root_bbox=None):
+    """预计算图层树的 CSS 布局规则，并在需要时由于文档流将子元素排序。"""
+    if root_bbox is None:
+        root_bbox = find_root_bbox(layers)
+        
+    canvas_width = 1920
+    if root_bbox and len(root_bbox) == 4:
+        canvas_width = root_bbox[2] - root_bbox[0]
+        
+    for layer in layers:
+        # Default positioning if not already processed by a parent flow
+        if "layout_css_rules" not in layer:
+            layer["layout_css_rules"] = {}
+            rx1, ry1, _, _ = layer["relative_bbox"]
+            tag = layer.get("layoutTag")
+            if tag == "fixed":
+                layer["layout_css_rules"]["position"] = "fixed"
+                layer["layout_css_rules"]["z-index"] = "100"
+                
+                # --- Fixed 元素的视口响应式定位逻辑 ---
+                # 1. 垂直方向:
+                # 如果元素位置在设计稿第一屏以内 (如 < 900px)，按原样顶端定位；
+                # 如果超出了第一屏，说明设计师可能只是将其与第二屏内容就近对比放置，此时真实意图往往是“垂直悬浮居中”。
+                if ry1 > 900:
+                    layer["layout_css_rules"]["top"] = "50%"
+                    layer["layout_css_rules"]["transform"] = "translateY(-50%)"
+                else:
+                    layer["layout_css_rules"]["top"] = "{}px".format(ry1)
+                
+                # 2. 水平方向:
+                # 为了防止随浏览器窗口缩放时 fixed 元素相对于内容区跑偏，通常让它相对于屏幕水平中线进行偏移。
+                center_x = canvas_width / 2
+                offset_x = rx1 - center_x
+                layer["layout_css_rules"]["left"] = "50%"
+                layer["layout_css_rules"]["margin-left"] = "{}px".format(int(offset_x))
+            else:
+                layer["layout_css_rules"]["position"] = "absolute"
+                layer["layout_css_rules"]["left"] = "{}px".format(rx1)
+                layer["layout_css_rules"]["top"] = "{}px".format(ry1)
+        
+        tag = layer.get("layoutTag")
+        rx1, ry1, rx2, ry2 = layer["relative_bbox"]
+        
+        # sizing and display
+        layer["layout_css_rules"]["width"] = "{}px".format(rx2 - rx1)
+        layer["layout_css_rules"]["height"] = "{}px".format(ry2 - ry1)
+        
+        if tag in ("flow-y", "flow-x") and layer.get("children"):
+            layer["layout_css_rules"]["display"] = "flex"
+            layer["layout_css_rules"]["flex-direction"] = "column" if tag == "flow-y" else "row"
+        else:
+            layer["layout_css_rules"]["display"] = "block"
+            
+        children = layer.get("children", [])
+        if not children:
+            continue
+            
+        if tag in ("flow-y", "flow-x"):
+            flow_children = [c for c in children if c.get("layoutTag") not in ("abs", "fixed")]
+            abs_children = [c for c in children if c.get("layoutTag") in ("abs", "fixed")]
+            
+            if tag == "flow-y":
+                flow_children.sort(key=lambda x: x["relative_bbox"][1])
+            else:
+                flow_children.sort(key=lambda x: x["relative_bbox"][0])
+                
+            _compute_margins_for_flow(flow_children, tag)
+            layer["children"] = flow_children + abs_children
+            
+        process_layout_rules(children, root_bbox)
