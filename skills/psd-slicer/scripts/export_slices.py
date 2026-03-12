@@ -15,8 +15,13 @@ if sys.platform == 'win32':
 
 def sanitize_filename(name):
     """Convert layer name to valid filename."""
+    # 自动处理标签：如果以 [tag]xxx 开头，尝试提取后面的有效名称
+    tag_match = re.match(r'^\[[^\]]+\](.+)', name)
+    if tag_match:
+        name = tag_match.group(1)
+
     # Replace invalid chars
-    invalid = '<>:"/\\|?*'
+    invalid = '<>:"/\\|?*[]'
     for char in invalid:
         name = name.replace(char, '_')
     # Remove leading/trailing spaces and dots
@@ -25,11 +30,11 @@ def sanitize_filename(name):
 
 
 def is_legally_named(name):
-    """Check if name contains only alphanumeric, underscore, and hyphen.
+    """Check if name contains only alphanumeric, underscore, hyphen, and brackets.
     
-    Legal definition: [a-zA-Z0-9_-]
+    Legal definition: [a-zA-Z0-9_-] and [ ] tags
     """
-    return bool(re.match(r'^[a-zA-Z0-9_-]+$', name))
+    return bool(re.match(r'^[a-zA-Z0-9_\[\]-]+$', name))
 
 
 def load_name_mapping(json_path):
@@ -133,9 +138,9 @@ def export_layer(layer, output_dir, exported_names=None, groups_only=False,
         return
     
     # MANDATORY: Check legal naming (unless explicitly disabled or mapped)
-    # Legal definition: [a-zA-Z0-9_-] only
-    # When name_mapping is provided, we skip this check because mapped names are already sanitized
-    if name_mapping is None and not allow_illegal_names and not is_legally_named(layer.name):
+    # 默认放行所有名称（包含中文等），除非开启 strict_naming (-s/--strict-naming)
+    # 当 name_mapping 提供时，跳过此检查，因为已在 mapping 中被处理
+    if name_mapping is None and kwargs.get('strict_naming') and not is_legally_named(layer.name):
         return
     
     # If prefix_filter is set, skip layers that don't match the prefix
@@ -171,20 +176,33 @@ def export_layer(layer, output_dir, exported_names=None, groups_only=False,
             elif layer.name in name_mapping:
                 base_name = name_mapping[layer.name]
                 print("Mapped by name '{}' -> '{}.png'".format(layer.name, base_name))
-            # 如果没有匹配到 mapping，但 mapping 存在且名称不合法，则跳过
-            elif not allow_illegal_names and not is_legally_named(layer.name):
+            # 如果没有匹配到 mapping，但开启了 strict-naming 且名称不合法，则跳过
+            elif kwargs.get('strict_naming') and not is_legally_named(layer.name):
                 print("Warning: Layer '{}' not in mapping and has illegal name, skipping".format(layer.name))
                 return
 
-        # 没有 mapping 或匹配失败，使用默认处理
+        # 没有 mapping 或匹配失败，使用默认处理/自动重命名
         if base_name is None:
-            base_name = sanitize_filename(layer.name)
+            if kwargs.get('auto_rename'):
+                layer_id = getattr(layer, 'layer_id', None)
+                prefix = 'group' if layer_is_group else 'layer'
+                if layer_id is not None:
+                    base_name = "{}-{}".format(prefix, layer_id)
+                else:
+                    base_name = prefix
+            else:
+                base_name = sanitize_filename(layer.name)
         
         filename = base_name
         counter = 1
         while filename in exported_names:
-            filename = "{}_{}".format(base_name, counter)
-            counter += 1
+            # 新去重逻辑：如果可用且合适，优先追加 layer_id
+            layer_id = getattr(layer, 'layer_id', None)
+            if layer_id is not None and "{}_{}".format(base_name, layer_id) not in exported_names:
+                 filename = "{}_{}".format(base_name, layer_id)
+            else:
+                 filename = "{}_{}".format(base_name, counter)
+                 counter += 1
         
         exported_names.add(filename)
         
@@ -209,11 +227,13 @@ def main():
     parser.add_argument("--output", "-o", default="images", help="Output directory for PNG slices")
     parser.add_argument("--groups-only", "-g", action="store_true", help="Only export layer groups, skip individual layers")
     parser.add_argument("--prefix", "-p", default=None, help="Only export layers whose names start with this prefix (e.g., 'slice-')")
-    parser.add_argument("--allow-illegal-names", action="store_true", help="Allow layers with illegal names (contains non-alphanumeric/underscore/hyphen chars). Disabled by default for production safety.")
+    parser.add_argument("--allow-illegal-names", action="store_true", help="[DEPRECATED] Always True by default. Allow layers with illegal names (contains non-alphanumeric/underscore/hyphen chars).")
+    parser.add_argument("--strict-naming", "-s", action="store_true", help="Enable strict naming check. Skip layers with illegal names.")
+    parser.add_argument("--auto-rename", action="store_true", help="Automatically rename layers to layer-xxx/group-xxx if not found in JSON mapping.")
     parser.add_argument("--mapping-json", "-m", default=None, 
                        help="Path to JSON file from psd-layer-reader for name mapping. "
-                            "When provided, uses originalName to match layers and "
-                            "name as output filename (useful for Chinese layer names).")
+                            "If not provided, the script will automatically look for JSON in the PSD directory: "
+                            "<psd_name>.json -> layer-tree.json -> psd_layers.json.")
     parser.add_argument("--skip-type", action="store_true", help="Skip text layers (kind == 'type')")
     args = parser.parse_args()
     
@@ -226,7 +246,9 @@ def main():
     modes = []
     if args.groups_only:
         modes.append("groups only")
-    modes.append("legal names enforced" if not args.allow_illegal_names else "illegal names allowed")
+    modes.append("legal names enforced" if args.strict_naming else "illegal names allowed")
+    if args.auto_rename:
+        modes.append("auto rename")
     if args.prefix:
         modes.append("prefix '{}'".format(args.prefix))
     print("Mode: {}".format(', '.join(modes)))
@@ -235,9 +257,29 @@ def main():
     
     # Load name mapping if provided
     name_mapping = None
-    if args.mapping_json:
-        print("Loading name mapping from: {}".format(args.mapping_json))
-        name_mapping = load_name_mapping(args.mapping_json)
+    mapping_path = args.mapping_json
+
+    # 没指定 mappings 且 psd 已指定，尝试自动查找映射文件
+    if not mapping_path and args.psd:
+        psd_path = Path(args.psd)
+        psd_dir = psd_path.parent
+        psd_basename = psd_path.stem
+
+        candidates = [
+            psd_dir / f"{psd_basename}.json",
+            psd_dir / "layer-tree.json",
+            psd_dir / "psd_layers.json"
+        ]
+        
+        for candidate in candidates:
+            if candidate.is_file():
+                mapping_path = str(candidate)
+                print(f"Auto-detected mapping JSON: {mapping_path}")
+                break
+
+    if mapping_path:
+        print("Loading name mapping from: {}".format(mapping_path))
+        name_mapping = load_name_mapping(mapping_path)
         print("Loaded {} name mappings".format(len(name_mapping)))
     
     # Export all layers
@@ -246,7 +288,9 @@ def main():
         export_layer(layer, output_dir, exported_names, 
                     groups_only=args.groups_only, 
                     prefix_filter=args.prefix, 
-                    allow_illegal_names=args.allow_illegal_names,
+                    allow_illegal_names=not args.strict_naming, # 保持兼容
+                    strict_naming=args.strict_naming, # 新参数传进去
+                    auto_rename=args.auto_rename,
                     name_mapping=name_mapping,
                     skip_type=args.skip_type)
     

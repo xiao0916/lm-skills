@@ -137,7 +137,7 @@ python scripts/generate_preview.py --help
 - `--flatten`：使用平铺模式（不保留分组结构）
 - `--dict`：项目级图层名翻译字典 JSON 文件路径（可选，用于翻译拼音/缩写等项目特有术语）
 - `--copy-all`：复制所有图片（不仅是匹配到的）
-- `--include-text`：把文字图层渲染成 `<div>`（默认关闭）
+- `--include-text`：把文字图层渲染成 `<div>` 标签（默认关闭）。当开启此参数时，脚本会直接读取 JSON 中的文本内容和样式进行 HTML 还原，而不是寻找对应的切片图片。这对于需要保留页面文案可编辑性、SEO 友好或减少图片体积的场景非常重要。
 - `--generate-react`：同时生成 React 组件（JSX + CSS Modules）
 - `--generate-vue`：同时生成 Vue 组件（单文件组件 SFC）
 - `--component-name`：React 组件名称（默认为 PsdComponent）

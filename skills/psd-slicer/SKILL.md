@@ -11,11 +11,14 @@ description: 将 Photoshop（.psd）文件的所有图层导出为独立的 PNG 
 
 **特性**：
 
-- ✅ 强制命名合法性检查（`[a-zA-Z0-9_-]` 仅，确保生产安全）
+- ✅ 强制命名合法性检查（支持 `[a-zA-Z0-9_-]` 及布局标签 `[tag]`）
+- ✅ 自动处理布局标签（如 `[flow-y]layout` 自动导出为 `layout.png`）
 - ✅ 递归处理嵌套图层组
-- ✅ 自动处理重名冲突
+- ✅ 自动处理重名冲突（带有 `layer_id` 级别防抖防词覆盖机制）
 - ✅ 支持按组/前缀过滤
 - ✅ 跳过不可见/空白图层
+- ✅ 默认无需配置即可支持导出中文、日文等非 ASCII 图层命名
+- ✅ 支持智能匹配同目录下 JSON 结构文件，或通过 `--auto-rename` 转化为通用切块命名
 
 ## 使用方式
 
@@ -23,19 +26,19 @@ description: 将 Photoshop（.psd）文件的所有图层导出为独立的 PNG 
 
 ```bash
 # 导出所有合法命名的图层
-py -3 scripts/export_slices.py design.psd
+py -3 scripts/export_slices.py --psd design.psd
 
 # 自定义输出目录
-py -3 scripts/export_slices.py design.psd -o assets/layers
+py -3 scripts/export_slices.py --psd design.psd -o assets/layers
 
 # 仅导出图层组（跳过单个图层）
-py -3 scripts/export_slices.py design.psd -g
+py -3 scripts/export_slices.py --psd design.psd -g
 
 # 按前缀过滤（如：slice-button）
-py -3 scripts/export_slices.py design.psd -p slice-
+py -3 scripts/export_slices.py --psd design.psd -p slice-
 
 # 组合使用
-py -3 scripts/export_slices.py design.psd -o ./comps/ -g -p component-
+py -3 scripts/export_slices.py --psd design.psd -o ./comps/ -g -p component-
 ```
 
 ### 参数说明
@@ -45,13 +48,21 @@ py -3 scripts/export_slices.py design.psd -o ./comps/ -g -p component-
 | `--output`              | `-o` | 输出目录（默认：`images/`）           |
 | `--groups-only`         | `-g` | 仅导出图层组                          |
 | `--prefix`              | `-p` | 前缀过滤（如：`slice-`）              |
-| `--allow-illegal-names` | 无   | 允许中文/特殊字符（慎用）             |
-| `--mapping-json`        | `-m` | JSON 映射文件路径（用于中文图层导出） |
+| `--strict-naming`       | `-s` | 强制进行命名合法性校验（不合法的名字会被跳过） |
+| `--auto-rename`         | 无   | 未命中映射时自动重命名图层为 `layer-xxx` 或 `group-xxx` |
+| `--mapping-json`        | `-m` | 显式指定 JSON 映射文件路径。若不填且所在工作目录存在同名或 `layer-tree.json` 等文件将自动匹配。|
 | `--skip-type`          | 无   | 跳过文本图层（`kind == 'type'`）      |
 
-## 何时使用名称映射
+## 何时使用名称映射与自动命名
 
-当 PSD 文件包含中文、日文或其他非 ASCII 字符命名的图层时，推荐使用 `--mapping-json` 参数。
+**默认行为：**
+现在可以不作任何处理，默认即可直接将含有中文字符的图层导出。当遇到重复中文名称（如都在根组件下叫 `背景`），现在会使用其独立的 `layer_id` 进行关联防重（例如 `背景_13.png` 和 `背景_14.png`），避免了由于 `_1` 这种简单的重叠导致的字典含义丢失。
+
+**推荐使用 `--mapping-json` 参数或让其自动匹配：**
+当有 `psd-layer-reader` 处理过的标准结构需要对应时，由于它处理过了树形关系，并且把特殊的布局标签 `[tag]` 也作了统一管理，能够达到切图命名和 JSON 中的 `name` 完全一一对应的效果，这对后续页面生成尤为关键。如果没有带上 `-m` 参数，本工具也会**自动在 PSD 所在目录寻找映射文件**（优先级：`[PSD同名文件].json` > `layer-tree.json` > `psd_layers.json`）。
+
+**使用 `--auto-rename`：**
+如果您不需要原设计中乱七八糟没有规范的图层名称，而是想统一直接转化为 `layer-xxx` 的无语义形式供其他引擎或预览体系使用，您可以直接使用 `--auto-rename` 参数使没能被匹配到的图层统统转化其名称。
 
 ### 技术实现
 
@@ -75,7 +86,7 @@ py -3 scripts/export_slices.py design.psd -o ./comps/ -g -p component-
 py -3 .claude/skills/psd-layer-reader/scripts/psd_layers.py design.psd -o layer-tree.json
 
 # 步骤 2: 使用映射导出
-py -3 .claude/skills/psd-slicer/scripts/export_slices.py design.psd --mapping-json layer-tree.json -o assets/
+py -3 .claude/skills/psd-slicer/scripts/export_slices.py --psd design.psd --mapping-json layer-tree.json -o assets/
 ```
 
 **注意事项**:
@@ -150,22 +161,22 @@ Done! Exported to: verify-flow/verify-010/sliced-images
 如果您计划在 HTML 中使用真实的文本（而不是图片），请使用 `--skip-type` 参数：
 
 ```bash
-py -3 scripts/export_slices.py design.psd --skip-type
+py -3 scripts/export_slices.py --psd design.psd --skip-type
 ```
 
 配合 `psd-json-preview` 的 `--include-text` 参数，可以实现设计稿文字的完美还原。
 
 ### 向后兼容
 
-- 不带 `--mapping-json` 参数时，行为与之前完全一致
-- 中文图层仍会被跳过（除非使用 `--allow-illegal-names`）
+- 废弃了 `--allow-illegal-names`（但传入不再引发崩溃，空执行），取而代之的是，现在脚本默认直接放行中文及特殊名称。如果需要强一致校验，必须明确传入 `--strict-naming` 或 `-s`。
+- 如果图层找不到映射且当前目录也未存在合适的 JSON 文件，则以当前的名称导出；除非开启了 `--auto-rename` 它会被自动清洗转换。
 
 ## 命名规则
 
-**合法✅**：`button`、`btn-primary`、`slice-01`、`component_card`
-**非法❌**：`按钮`（中文）、`Button<>`（特殊字符）、`icon[close]`（方括号）
+**合法✅**：`button`、`btn-primary`、`[flow-y]layout`（自动剥离标签）、`[abs]icon`
+**非法❌**：`按钮`（中文）、`Button<>`（特殊字符）
 
-**规则**：默认仅导出符合 `[a-zA-Z0-9_-]` 的图层，确保文件系统兼容性和代码安全性。
+**规则**：默认仅导出符合 `[a-zA-Z0-9_-]` 的图层。若图层名以 `[tag]name` 形式命名，系统将自动识别并剥离标签，提取 `name` 作为文件名，确保文件系统兼容性。
 
 ## 依赖说明
 
@@ -194,18 +205,15 @@ py -3 -m pip install scikit-image
 - **预览生成**：为 psd-json-preview 技能准备切片图片
 - **设计交付**：批量导出设计文件的所有图层
 
-## 用户使用指南
-
-详细的使用示例和 Prompt 模板请参考：
-📄 **[references/USER_GUIDE.md](references/USER_GUIDE.md)**
-
 ### 快速参考
 
 | 用户关键词              | AI 应执行                                      |
 | ----------------------- | ---------------------------------------------- |
-| "中文图层" / "中文命名" | 使用 `--mapping-json` 参数（先生成 JSON 映射） |
+| "中文图层" / "中文命名" | 默认即可直接满足。为了与代码生成相性好，依然推荐先执行 JSON 提取生成结构以被切图器自动应用。|
+| "统一重命名" / "转ID化" | 使用 `--auto-rename` 参数                     |
 | "只导出组" / "图层组"   | 使用 `-g` / `--groups-only` 参数               |
 | "icon-" 开头            | 使用 `-p icon-` 参数                           |
+| "严格名称检查"          | 使用 `-s` / `--strict-naming` 参数             |
 | "保存到 xxx"            | 使用 `-o xxx` 参数                             |
 | "不导出文字" / "文字转代码" | 使用 `--skip-type` 参数                       |
 
@@ -214,4 +222,3 @@ py -3 -m pip install scikit-image
 ## 资源文件
 
 - **scripts/export_slices.py** - 核心导出脚本（219行）
-- **README.md** - 人类用户参考文档
