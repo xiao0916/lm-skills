@@ -214,8 +214,11 @@ def export_layer(layer, output_dir, exported_names=None, groups_only=False,
         
     except Exception as e:
         print("Warning: Could not export '{}': {}".format(layer.name, e))
+        if "scikit-image" in str(e) or "composite" in str(e).lower():
+            print("Tip: Install scikit-image to support layers with special effects: pip install scikit-image")
     
     # Recursively export children (only for groups)
+    # CRITICAL: Always recurse, even if parent composite failed, to ensure nested layers are exported
     if layer_is_group:
         for child in layer:
             export_layer(child, output_dir, exported_names, groups_only, prefix_filter, allow_illegal_names, name_mapping, **kwargs)

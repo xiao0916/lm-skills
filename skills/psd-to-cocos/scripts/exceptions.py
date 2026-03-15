@@ -5,6 +5,8 @@ PSD to Cocos 自定义异常类
 """
 
 
+from typing import List, Optional
+
 class PSDToCocosError(Exception):
     """基础异常类"""
     pass
@@ -16,7 +18,7 @@ class ToolNotFoundError(PSDToCocosError):
     当 psd-layer-reader 或 psd-slicer 工具无法找到时抛出。
     """
     
-    def __init__(self, tool_name: str, search_paths: list[str] | None = None):
+    def __init__(self, tool_name: str, search_paths: List[str] | None = None):
         self.tool_name = tool_name
         self.search_paths = search_paths or []
         
@@ -92,77 +94,4 @@ class AtomicOperationError(PSDToCocosError):
             message += f"\n临时路径: {temp_path}"
         if target_path:
             message += f"\n目标路径: {target_path}"
-        super().__init__(message)
-
-
-class ConfigurationError(PSDToCocosError):
-    """配置错误异常
-    
-    当配置无效或缺少必需的配置项时抛出。
-    """
-    pass
-
-
-class DependencyError(PSDToCocosError):
-    """依赖缺失异常
-    
-    当必需的 Python 依赖未安装时抛出。
-    """
-    
-    def __init__(self, package_name: str, install_command: str = ""):
-        self.package_name = package_name
-        self.install_command = install_command or f"pip install {package_name}"
-        
-        message = (
-            f"缺少必需的依赖: {package_name}\n"
-            f"请运行: {self.install_command}"
-        )
-        super().__init__(message)
-
-
-class InvalidPsdError(PSDToCocosError):
-    """PSD 文件损坏或格式不支持
-    
-    当 PSD 文件无法解析、文件损坏或使用了不支持的 PSD 特性时抛出。
-    """
-    
-    def __init__(self, psd_path: str, reason: str = ""):
-        self.psd_path = psd_path
-        self.reason = reason
-        
-        message = f"PSD 文件无效或损坏: {psd_path}"
-        if reason:
-            message += f"\n原因: {reason}"
-        message += "\n\n建议:"
-        message += "\n  1. 检查文件是否完整下载/复制"
-        message += "\n  2. 尝试在 Photoshop 中打开并重新保存"
-        message += "\n  3. 确保文件格式为标准的 PSD 格式"
-        
-        super().__init__(message)
-
-
-class DiskFullError(PSDToCocosError):
-    """磁盘空间不足
-    
-    当输出目录所在磁盘空间不足时抛出。
-    """
-    
-    def __init__(self, path: str, required_bytes: int = 0, available_bytes: int = 0):
-        self.path = path
-        self.required_bytes = required_bytes
-        self.available_bytes = available_bytes
-        
-        message = f"磁盘空间不足: {path}"
-        
-        if required_bytes > 0 and available_bytes > 0:
-            required_mb = required_bytes / (1024 * 1024)
-            available_mb = available_bytes / (1024 * 1024)
-            message += f"\n需要空间: {required_mb:.1f} MB"
-            message += f"\n可用空间: {available_mb:.1f} MB"
-        
-        message += "\n\n建议:"
-        message += "\n  1. 清理磁盘空间"
-        message += "\n  2. 选择其他输出目录"
-        message += "\n  3. 使用 --flat 选项减少输出文件数量"
-        
         super().__init__(message)
